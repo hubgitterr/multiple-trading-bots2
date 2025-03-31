@@ -17,9 +17,7 @@ class DCATradingBot(BaseTradingBot):
         self.logger = logging.getLogger(f"{self.bot_type}.{self.name}.{self.bot_id}")
 
         # --- Strategy Specific Parameters ---
-        # Amount of QUOTE currency to spend per purchase (e.g., 100 USDT)
         self.purchase_amount_quote: float = float(self.config_params.get('purchase_amount_quote', 0)) 
-        # Frequency of purchases in seconds (e.g., 86400 for daily, 604800 for weekly)
         self.purchase_interval_seconds: int = int(self.config_params.get('purchase_interval_seconds', 86400)) 
         # TODO: Add parameters for dip buying, trailing stop loss if needed later
 
@@ -43,8 +41,9 @@ class DCATradingBot(BaseTradingBot):
                 
                 # Check if it's time for the next purchase
                 make_purchase = False
+                time_to_wait = self.purchase_interval_seconds # Default wait time
+                
                 if self.last_purchase_time is None:
-                    # First run after starting, make initial purchase
                     make_purchase = True
                     self.logger.info(f"First run for DCA bot {self.name}. Making initial purchase.")
                 else:
@@ -53,52 +52,44 @@ class DCATradingBot(BaseTradingBot):
                         make_purchase = True
                         self.logger.info(f"Interval of {self.purchase_interval_seconds}s passed. Time for DCA purchase for {self.name}.")
                     else:
-                         # Calculate time until next purchase for logging/debugging
-                         wait_time = self.purchase_interval_seconds - time_since_last
-                         self.logger.debug(f"Next DCA purchase for {self.name} in {wait_time:.0f} seconds.")
-
+                         time_to_wait = self.purchase_interval_seconds - time_since_last
+                         self.logger.debug(f"Next DCA purchase for {self.name} in {time_to_wait:.0f} seconds.")
 
                 if make_purchase:
                     self.logger.info(f"Attempting DCA purchase for {self.symbol}: spending {self.purchase_amount_quote} quote currency.")
                     
-                    # --- Place Market Buy Order ---
-                    # For DCA, market orders are common to ensure execution.
-                    # We need to specify the quoteOrderQty for market buys by quote amount.
-                    
-                    if not self._binance_client:
-                         self.logger.error("Cannot place DCA order: Binance client not available.")
-                         # Skip this cycle, will retry later
-                    else:
-                        loop = asyncio.get_event_loop()
-                        try:
-                            # Use create_order with quoteOrderQty for market buy by quote amount
-                            order = await loop.run_in_executor(
-                                None, 
-                                self._binance_client.create_order, 
-                                symbol=self.symbol, 
-                                side='BUY', 
-                                type='MARKET', 
-                                quoteOrderQty=self.purchase_amount_quote
-                            )
-                            self.logger.info(f"DCA Market BUY order placed successfully: {order}")
-                            self.last_purchase_time = now # Update last purchase time only on success
-                            # TODO: Record trade in database
+                    # Use the base class method which handles DB recording
+                    # Pass quantity=0 because we are using quoteOrderQty
+                    order_result = await self._place_order(
+                        side='BUY', 
+                        order_type='MARKET', 
+                        quantity=0 
+                    )
                             
-                        except Exception as e:
-                            self.logger.error(f"Failed to place DCA market BUY order for {self.symbol}: {e}", exc_info=True)
-                            # Don't update last_purchase_time if order failed
+                    if order_result and order_result.get('status') == 'FILLED':
+                        self.logger.info(f"DCA Market BUY order placed successfully: {order_result.get('orderId')}")
+                        self.last_purchase_time = now # Update last purchase time only on success
+                    else:
+                        self.logger.error(f"Failed to place or confirm DCA market BUY order for {self.symbol}.")
+                        # Don't update last_purchase_time if order failed
+                        time_to_wait = 60 # Wait 1 minute before checking again after failure
 
-                # Wait before the next check. Sleep for a fraction of the interval 
-                # or a fixed short duration to ensure responsiveness to stop signals.
-                # Sleeping for the full interval might delay stop requests.
-                check_interval = min(60, self.purchase_interval_seconds // 10) # Check every minute or 1/10th of interval
-                await asyncio.sleep(check_interval) 
+                # Wait until the next purchase time, checking for stop signal periodically
+                self.logger.debug(f"DCA check complete for {self.name}. Waiting for {time_to_wait:.0f} seconds...")
+                sleep_interval = 5 # Check every 5 seconds
+                remaining_sleep = time_to_wait
+                while remaining_sleep > 0 and self.is_active:
+                     await asyncio.sleep(min(sleep_interval, remaining_sleep))
+                     remaining_sleep -= sleep_interval
+                
+                # If loop exited because is_active became false, break outer loop
+                if not self.is_active: break
 
             except asyncio.CancelledError:
                 self.logger.info(f"DCA logic loop for {self.symbol} cancelled.")
                 break
             except Exception as e:
                 self.logger.error(f"Error in DCA logic loop for {self.symbol}: {e}", exc_info=True)
-                await asyncio.sleep(60) # Wait after error
+                # Removed sleep(60) - loop will retry or exit based on is_active on next iteration
 
         self.logger.info(f"DCA logic loop for {self.symbol} stopped.")

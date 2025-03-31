@@ -181,16 +181,23 @@ class MomentumTradingBot(BaseTradingBot):
                              self.stop_loss_price = None
 
 
-                # 5. Wait for the next interval
-                self.logger.debug(f"Check complete for {self.symbol}. Sleeping for {interval_seconds} seconds.")
-                await asyncio.sleep(interval_seconds) 
+                # 5. Wait for the next interval, checking for stop signal periodically
+                self.logger.debug(f"Check complete for {self.symbol}. Waiting for next interval ({interval_seconds}s)...")
+                sleep_interval = 5 # Check every 5 seconds
+                remaining_sleep = interval_seconds
+                while remaining_sleep > 0 and self.is_active:
+                     await asyncio.sleep(min(sleep_interval, remaining_sleep))
+                     remaining_sleep -= sleep_interval
+                
+                # If loop exited because is_active became false, break outer loop
+                if not self.is_active: break
 
             except asyncio.CancelledError:
                 self.logger.info(f"Momentum logic loop for {self.symbol} cancelled.")
                 break 
             except Exception as e:
                 self.logger.error(f"Error in momentum logic loop for {self.symbol}: {e}", exc_info=True)
-                await asyncio.sleep(60) 
+                # Removed sleep(60) - loop will retry or exit based on is_active on next iteration
 
         self.logger.info(f"Momentum logic loop for {self.symbol} stopped.")
         # Reset state upon stopping

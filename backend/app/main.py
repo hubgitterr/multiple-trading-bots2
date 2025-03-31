@@ -3,21 +3,21 @@ import uvicorn
 import asyncio # For WebSocket sleep
 import datetime # For timestamp
 import json # For creating JSON messages
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException, status # Added HTTPException, status
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException, status 
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List, Dict, Set, Optional # Added Optional
+from typing import List, Dict, Set, Optional 
 from dotenv import load_dotenv
-from ..utils.binance_client import get_current_price # Corrected relative import
-# Correctly import running_bots from the bots module where it's defined
+from ..utils.binance_client import get_current_price 
 from .bots import running_bots 
-# Import JWT functions and secret
-from jose import jwt, JWTError # Import JWT functions
+from jose import jwt, JWTError 
+# Import WebSocketState for connection checks
+from starlette.websockets import WebSocketState 
 
-# Load environment variables from .env file located in the backend directory
+# Load environment variables
 dotenv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env')
 load_dotenv(dotenv_path=dotenv_path)
 
-# Load JWT Secret for WebSocket auth
+# Load JWT Secret
 SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET")
 if not SUPABASE_JWT_SECRET:
      raise EnvironmentError("SUPABASE_JWT_SECRET environment variable not set.")
@@ -57,7 +57,6 @@ class ConnectionManager:
         self.active_connections: Dict[str, Set[WebSocket]] = {} 
 
     async def connect(self, websocket: WebSocket, user_id: str):
-        # Accept is handled before calling connect
         if user_id not in self.active_connections:
             self.active_connections[user_id] = set()
         self.active_connections[user_id].add(websocket)
@@ -73,7 +72,6 @@ class ConnectionManager:
                  print(f"WebSocket disconnected for user {user_id}: {websocket.client}")
                  disconnected = True
         
-        # Fallback if user_id wasn't provided or wasn't found above
         if not disconnected:
             for uid, connections in list(self.active_connections.items()): 
                 if websocket in connections:
@@ -85,68 +83,57 @@ class ConnectionManager:
         if not disconnected: print(f"WebSocket {websocket.client} disconnected (user unknown or already removed).")
 
     async def send_personal_message(self, message: str, websocket: WebSocket):
-        # Check if connection is still open before sending
         if websocket.client_state == WebSocketState.CONNECTED:
             try: await websocket.send_text(message)
             except Exception as e: print(f"Error sending personal message to {websocket.client}: {e}"); self.disconnect(websocket) 
         else:
              print(f"Attempted to send personal message to disconnected client: {websocket.client}")
-             self.disconnect(websocket) # Ensure removal if state is wrong
+             self.disconnect(websocket) 
 
     async def broadcast(self, message: str):
-        # Create a list of connections to send to *before* awaiting
         connections_to_send = [conn for connections in self.active_connections.values() for conn in connections if conn.client_state == WebSocketState.CONNECTED]
         if not connections_to_send: return
 
-        tasks = [conn.send_text(message) for conn in connections_to_send]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # Check results for errors (less critical for broadcast, just log)
-        for i, result in enumerate(results):
-             if isinstance(result, Exception): 
-                  # We don't know exactly which connection failed without more complex tracking
-                  print(f"Error during broadcast: {result}") 
-                  # Disconnecting here based on index is unreliable if list changed
+        # Send messages individually with error handling
+        for conn in connections_to_send:
+             try:
+                 # Check state again right before sending
+                 if conn.client_state == WebSocketState.CONNECTED:
+                      await conn.send_text(message)
+             except Exception as e:
+                  print(f"Error during broadcast to {conn.client}: {e}")
+                  # Disconnect the specific connection that failed
+                  # Need to find the user_id associated with conn - this is inefficient
+                  user_id_to_disconnect = None
+                  for uid, conns in self.active_connections.items():
+                       if conn in conns:
+                            user_id_to_disconnect = uid
+                            break
+                  self.disconnect(conn, user_id_to_disconnect)
 
     async def broadcast_to_user(self, message: str, user_id: str):
         if user_id in self.active_connections:
-            # Create list of connections for this user before awaiting
-            user_connections = [conn for conn in self.active_connections[user_id] if conn.client_state == WebSocketState.CONNECTED]
+            user_connections = list(self.active_connections[user_id]) # Create list copy
             if not user_connections: return
 
-            tasks = [conn.send_text(message) for conn in user_connections]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-
-            # Handle disconnects for this specific user
-            failed_connections = []
-            for i, result in enumerate(results):
-                 if isinstance(result, Exception):
-                      failed_conn = user_connections[i]
-                      print(f"Error broadcasting to user {user_id} ({failed_conn.client}): {result}. Disconnecting.")
-                      failed_connections.append(failed_conn)
-            
-            # Disconnect failed connections for this user
-            if failed_connections:
-                 if user_id in self.active_connections: # Check if user still exists
-                      for conn in failed_connections:
-                           if conn in self.active_connections[user_id]:
-                                self.active_connections[user_id].remove(conn)
-                      if not self.active_connections[user_id]:
-                           del self.active_connections[user_id]
-
+            for conn in user_connections:
+                 try:
+                      # Check state again right before sending
+                      if conn.client_state == WebSocketState.CONNECTED:
+                           await conn.send_text(message)
+                 except Exception as e:
+                      print(f"Error broadcasting to user {user_id} ({conn.client}): {e}. Disconnecting.")
+                      self.disconnect(conn, user_id) # Disconnect specific failed connection
 
 manager = ConnectionManager()
 
 # --- WebSocket Authentication Helper ---
-# Import WebSocketState for connection checks
-from starlette.websockets import WebSocketState 
-
 async def authenticate_websocket(websocket: WebSocket) -> Optional[str]:
     """
     Accepts connection, waits for an auth message, validates the token, 
     and returns user_id or None if auth fails.
     """
-    await websocket.accept() # Accept connection first
+    await websocket.accept() 
     try:
         message_str = await asyncio.wait_for(websocket.receive_text(), timeout=10.0) 
         message = json.loads(message_str)
@@ -157,20 +144,12 @@ async def authenticate_websocket(websocket: WebSocket) -> Optional[str]:
             
         token = message["token"]
         
-        # --- Token Validation using JWT Secret ---
         try:
-            payload = jwt.decode(
-                token,
-                SUPABASE_JWT_SECRET, 
-                algorithms=["HS256"], 
-                audience="authenticated" 
-            )
+            payload = jwt.decode(token, SUPABASE_JWT_SECRET, algorithms=["HS256"], audience="authenticated")
             user_id: str = payload.get("sub")
             if user_id is None: raise JWTError("Token payload missing 'sub'")
-            
             print(f"WebSocket authenticated for user: {user_id} using JWT Secret.")
             return user_id
-
         except JWTError as e:
             print(f"WebSocket JWT Error: {e}")
             await websocket.close(code=1008, reason=f"Authentication failed: {e}")
@@ -179,7 +158,6 @@ async def authenticate_websocket(websocket: WebSocket) -> Optional[str]:
              print(f"WebSocket Auth Error: {e}")
              await websocket.close(code=1008, reason="Authentication failed")
              return None
-        # --- End Token Validation ---
 
     except asyncio.TimeoutError:
         print("WebSocket auth timeout."); await websocket.close(code=1008, reason="Auth timeout"); return None
@@ -189,17 +167,13 @@ async def authenticate_websocket(websocket: WebSocket) -> Optional[str]:
          print("WebSocket received non-JSON auth message."); await websocket.close(code=1008, reason="Invalid auth message format"); return None
     except Exception as e:
         print(f"Error during WebSocket authentication: {e}"); 
-        # Avoid closing if already closed
         if websocket.client_state != WebSocketState.DISCONNECTED:
              await websocket.close(code=1011, reason="Internal server error during auth")
         return None
 
-
 # --- WebSocket Endpoint ---
 @app.websocket("/ws/updates")
 async def websocket_endpoint(websocket: WebSocket):
-    """Handles authenticated WebSocket connections for real-time updates."""
-    
     user_id = await authenticate_websocket(websocket) 
     if not user_id: return 
 
@@ -209,10 +183,8 @@ async def websocket_endpoint(websocket: WebSocket):
         await manager.send_personal_message(json.dumps({"type": "status", "message": "Authenticated. Receiving updates."}), websocket)
         
         while True:
-            # Check connection state before proceeding
             if websocket.client_state != WebSocketState.CONNECTED: break 
 
-            # Example: Broadcast price update 
             symbol = "BTCUSDT"
             price = await get_current_price(symbol)
             if price is not None:
@@ -222,8 +194,6 @@ async def websocket_endpoint(websocket: WebSocket):
                 })
                 await manager.broadcast(price_update_message) 
             
-            # Example: Broadcast user-specific bot status
-            # Check connection state again before potentially long operation
             if websocket.client_state != WebSocketState.CONNECTED: break 
             
             user_bot_statuses = [
@@ -244,9 +214,7 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception as e:
          print(f"WebSocket error for user {user_id} ({websocket.client}): {e}")
     finally:
-         # Ensure disconnect is called on exit
          manager.disconnect(websocket, user_id) 
-
 
 # --- Main Execution Block ---
 if __name__ == "__main__":

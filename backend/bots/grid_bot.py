@@ -216,8 +216,16 @@ class GridTradingBot(BaseTradingBot):
             try:
                 await self._check_and_handle_fills()
                 
-                # Wait before the next check cycle
-                await asyncio.sleep(30) # Check orders every 30 seconds (adjust as needed)
+                # Wait before the next check cycle, checking for stop signal periodically
+                sleep_duration = 30 # Check orders every 30 seconds (adjust as needed)
+                sleep_interval = 5  # Check stop flag every 5 seconds
+                remaining_sleep = sleep_duration
+                while remaining_sleep > 0 and self.is_active:
+                     await asyncio.sleep(min(sleep_interval, remaining_sleep))
+                     remaining_sleep -= sleep_interval
+                
+                # If loop exited because is_active became false, break outer loop
+                if not self.is_active: break
 
             except asyncio.CancelledError:
                 self.logger.info(f"Grid logic loop for {self.symbol} cancelled.")
