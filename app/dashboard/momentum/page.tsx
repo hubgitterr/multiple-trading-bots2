@@ -63,20 +63,51 @@ export default function MomentumBotPage() {
   };
 
   const handleStartStop = async (bot: BotConfigResponse, action: 'start' | 'stop') => {
-     // TODO: Implement API call to start/stop bot
      console.log(`${action} bot ${bot.id}`);
-     alert(`Bot ${action} logic not implemented yet.`);
-     // Example:
-     // try { ... apiClient.post(`/api/bots/${bot.id}/${action}`, {}, { headers }) ... fetchBots(); } catch ...
+     // Add loading state specific to this action? For now, use general isLoading.
+     // setIsLoading(true); // Consider adding specific loading indicators per bot row
+     setError(null); // Corrected: Use setError
+     try {
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+        if (sessionError) throw new Error(`Supabase auth error: ${sessionError.message}`);
+        const token = session?.access_token;
+        if (!token) throw new Error("Authentication token not found.");
+
+        const headers = { Authorization: `Bearer ${token}` };
+        const response = await apiClient.post(`/api/bots/${bot.id}/${action}`, {}, { headers });
+
+        alert(`Bot ${action} request sent successfully: ${response.data?.message || ''}`);
+        fetchBots(); // Refresh list to reflect potential is_active change
+     } catch (error: any) {
+         console.error(`Failed to ${action} bot:`, error);
+         setError(error.response?.data?.detail || error.message || `Failed to ${action} bot.`);
+     } finally {
+        // setIsLoading(false);
+     }
   };
 
    const handleDelete = async (botId: string) => {
-     if (!confirm("Are you sure you want to delete this bot configuration?")) return;
-     // TODO: Implement API call to delete bot
-     console.log(`Delete bot ${botId}`);
-     alert(`Bot delete logic not implemented yet.`);
-      // Example:
-     // try { ... apiClient.delete(`/api/bots/${botId}`, { headers }) ... fetchBots(); } catch ...
+     if (!confirm("Are you sure you want to delete this bot configuration? This action cannot be undone.")) return;
+     
+     setError(null); // Corrected: Use setError
+     // Consider adding a specific loading state for deletion
+     try {
+         const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+         if (sessionError) throw new Error(`Supabase auth error: ${sessionError.message}`);
+         const token = session?.access_token;
+         if (!token) throw new Error("Authentication token not found.");
+
+         const headers = { Authorization: `Bearer ${token}` };
+         await apiClient.delete(`/api/bots/${botId}`, { headers });
+
+         alert(`Bot ${botId} deleted successfully.`);
+         fetchBots(); // Refresh the list
+     } catch (error: any) {
+         console.error(`Failed to delete bot ${botId}:`, error);
+         setError(error.response?.data?.detail || error.message || `Failed to delete bot.`);
+     } finally {
+         // Reset loading state if added
+     }
    };
 
 

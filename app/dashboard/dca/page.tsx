@@ -60,15 +60,47 @@ export default function DCABotPage() {
 
   const handleStartStop = async (bot: BotConfigResponse, action: 'start' | 'stop') => {
      console.log(`${action} bot ${bot.id}`);
-     alert(`Bot ${action} logic not implemented yet.`);
-     // TODO: API call
+     setError(null);
+     try {
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+        if (sessionError) throw new Error(`Supabase auth error: ${sessionError.message}`);
+        const token = session?.access_token;
+        if (!token) throw new Error("Authentication token not found.");
+
+        const headers = { Authorization: `Bearer ${token}` };
+        const response = await apiClient.post(`/api/bots/${bot.id}/${action}`, {}, { headers });
+
+        alert(`Bot ${action} request sent successfully: ${response.data?.message || ''}`);
+        fetchBots(); // Refresh list
+     } catch (error: any) {
+         console.error(`Failed to ${action} bot:`, error);
+         setError(error.response?.data?.detail || error.message || `Failed to ${action} bot.`);
+     } finally {
+         // Reset specific loading state if implemented
+     }
   };
 
    const handleDelete = async (botId: string) => {
-     if (!confirm("Are you sure you want to delete this bot configuration?")) return;
-     console.log(`Delete bot ${botId}`);
-     alert(`Bot delete logic not implemented yet.`);
-     // TODO: API call
+     if (!confirm("Are you sure you want to delete this bot configuration? This action cannot be undone.")) return;
+     
+     setError(null);
+     try {
+         const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+         if (sessionError) throw new Error(`Supabase auth error: ${sessionError.message}`);
+         const token = session?.access_token;
+         if (!token) throw new Error("Authentication token not found.");
+
+         const headers = { Authorization: `Bearer ${token}` };
+         await apiClient.delete(`/api/bots/${botId}`, { headers });
+
+         alert(`Bot ${botId} deleted successfully.`);
+         fetchBots(); // Refresh the list
+     } catch (error: any) {
+         console.error(`Failed to delete bot ${botId}:`, error);
+         setError(error.response?.data?.detail || error.message || `Failed to delete bot.`);
+     } finally {
+         // Reset loading state if implemented
+     }
    };
 
   return (

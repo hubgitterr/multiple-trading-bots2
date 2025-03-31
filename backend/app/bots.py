@@ -32,12 +32,13 @@ router = APIRouter()
 async def _get_bot_config_from_db(bot_id: uuid.UUID, user_id: str, supabase_client = None) -> Optional[Dict[str, Any]]:
     """Fetches bot config from DB, ensuring user ownership."""
     if not supabase_client:
-        supabase_client = await get_supabase_backend_client()
+        supabase_client = await get_supabase_backend_client() # Keep await for client init
     try:
         # RLS policy should enforce user_id match
-        response = await supabase_client.table('bot_configs').select("*").eq('id', str(bot_id)).eq('user_id', user_id).maybe_single().execute()
+        # Remove await from execute()
+        response = supabase_client.table('bot_configs').select("*").eq('id', str(bot_id)).eq('user_id', user_id).maybe_single().execute()
         if response.data:
-            # Convert UUIDs back if needed, though Pydantic might handle it
+            # Convert UUIDs back if needed
              response.data['id'] = uuid.UUID(response.data['id'])
              response.data['user_id'] = uuid.UUID(response.data['user_id'])
              return response.data
@@ -85,9 +86,10 @@ async def create_bot_configuration(
     
     try:
         insert_data = bot_data.dict()
-        insert_data['user_id'] = current_user_id # Add the user ID
+        insert_data['user_id'] = current_user_id 
         
-        response = await supabase.table('bot_configs').insert(insert_data).execute()
+        # Remove await from execute()
+        response = supabase.table('bot_configs').insert(insert_data).execute()
         
         if not response.data:
             logger.error(f"Failed to insert bot config: {response.error}")
@@ -115,9 +117,10 @@ async def list_bot_configurations(current_user_id: str = Depends(get_current_use
     
     try:
         # RLS policy should handle filtering by user_id
-        response = await supabase.table('bot_configs').select("*").eq('user_id', current_user_id).execute()
+        # Remove await from execute()
+        response = supabase.table('bot_configs').select("*").eq('user_id', current_user_id).execute()
         
-        if response.data is None: # Check for None explicitly
+        if response.data is None: 
              logger.error(f"Supabase error fetching bot configs for user {current_user_id}: {response.error}")
              raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to fetch bot configurations.")
 
@@ -170,7 +173,8 @@ async def update_bot_configuration(
 
     try:
         # RLS policy should enforce user_id match
-        response = await supabase.table('bot_configs').update(update_payload).eq('id', str(bot_id)).eq('user_id', current_user_id).execute()
+        # Remove await from execute()
+        response = supabase.table('bot_configs').update(update_payload).eq('id', str(bot_id)).eq('user_id', current_user_id).execute()
 
         if not response.data:
              # Could be not found or another error
@@ -225,9 +229,10 @@ async def delete_bot_configuration(
 
     try:
         # RLS policy should enforce user_id match
-        response = await supabase.table('bot_configs').delete().eq('id', str(bot_id)).eq('user_id', current_user_id).execute()
+        # Remove await from execute()
+        response = supabase.table('bot_configs').delete().eq('id', str(bot_id)).eq('user_id', current_user_id).execute()
 
-        # Check if deletion was successful (data should be returned on success)
+        # Check if deletion was successful
         if not response.data:
              # Could be not found or another error
              logger.error(f"Failed to delete bot config {bot_id} for user {current_user_id}: {response.error}")

@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase'; // Import supabase client
-import DashboardLayoutComponent from '@/components/dashboard/Layout'; 
+import DashboardLayoutComponent from '@/components/dashboard/Layout'; // Restore import
 
 export default function DashboardPagesLayout({
   children,
@@ -33,7 +33,7 @@ export default function DashboardPagesLayout({
 
     checkAuth();
 
-    // Optional: Listen for auth state changes (e.g., logout in another tab)
+    // Listen for auth state changes
     const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
        if (event === 'SIGNED_OUT' || !session) {
            console.log("Auth state changed to signed out, redirecting.");
@@ -53,12 +53,10 @@ export default function DashboardPagesLayout({
 
   // Show loading state or null while checking auth
   if (isLoading) {
-    return <div className="flex h-screen items-center justify-center">Loading...</div>; // Or a proper loading spinner
+    return <div className="flex h-screen items-center justify-center">Loading Authentication...</div>; 
   }
 
-  // If authenticated, render the layout and children
-  // If not authenticated (and not loading), this will return null, 
-  // preventing flicker before redirect happens in useEffect.
+  // If authenticated, render the actual layout component
   if (isAuthenticated) { 
     return (
       <DashboardLayoutComponent>
@@ -69,4 +67,4 @@ export default function DashboardPagesLayout({
 
   // Return null while redirecting or if authentication fails initially
   return null; 
-} // Added missing closing brace
+}

@@ -52,6 +52,6 @@ const config: Config = {
       },
     },
   },
-  plugins: [require("tailwindcss-animate")], // Add animate plugin if needed later
+  plugins: [], // Removed tailwindcss-animate for now
 };
 export default config;
